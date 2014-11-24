@@ -15,11 +15,12 @@ void connectivityCPU(int *gradient, int *connectedImage, int width, int height, 
   queue.rear = 0;
   queue.size = width*height;
   queue.vals = (int*)malloc(width*height*sizeof(int));
+  int i,j,iOff,jOff;
 
   //Initial setup to find starting points for BFS
-  for (int i=0; i < height; i++)
+  for (i=0; i < height; i++)
   {
-    for (int j=0; j < width; j++)
+    for (j=0; j < width; j++)
     {
       if (gradient[i*width + j] > lowThresh)
       {
@@ -46,8 +47,8 @@ void connectivityCPU(int *gradient, int *connectedImage, int width, int height, 
   int current = get(&queue);
   while (current > 0)
   {
-    for(int iOff = -1; iOff < 2; iOff++){
-      for(int jOff = -1; jOff < 2; jOff++){
+    for(iOff = -1; iOff < 2; iOff++){
+      for(jOff = -1; jOff < 2; jOff++){
         int t = current - iOff - jOff*width;
         if ( (0 <= t) && (t <= width*height) && (connectedImage[t] == -1) )
         {
@@ -63,9 +64,9 @@ void connectivityCPU(int *gradient, int *connectedImage, int width, int height, 
 
 
   //Convert Enumerations to Image format
-  for (int i=0; i < height; i++)
+  for (i=0; i < height; i++)
   {
-    for (int j=0; j < width; j++)
+    for (j=0; j < width; j++)
     {
       if (connectedImage[i*width + j] == -2)
       {

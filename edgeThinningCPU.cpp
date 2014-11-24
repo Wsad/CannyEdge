@@ -1,9 +1,10 @@
 #include "cannyCPU.h"
 
 void thinEdgesCPU(int *mag, enum direction *dir, int width, int height){
-  for(int i=1; i < height-1; i++)
+  int i,j;
+  for(i=1; i < height-1; i++)
   {
-    for(int j=1; j < width-1; j++)
+    for(j=1; j < width-1; j++)
     {
       int id = i*width + j;
       int dx1, dy1, dx2, dy2;

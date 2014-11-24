@@ -9,6 +9,7 @@
 
 // TODO: Add threshold parameter
 void calcGradientCPU(int *src, int *mag, enum direction *dir, int width, int height, int threshold){
+  int i,j,iOff,jOff;
 
   int gxMask[] = {  -1, 0, 1, 
                     -2, 0, 2,
@@ -20,22 +21,22 @@ void calcGradientCPU(int *src, int *mag, enum direction *dir, int width, int hei
 
   // Border values skipped for now
   // TODO: initial loop for edge pixels (with extend or wrap)
-  for(int i=1; i < height-1; i++)
+  for(i=1; i < height-1; i++)
   {
-    for(int j=1; j < width-1; j++)
+    for(j=1; j < width-1; j++)
     {
       int Gx = 0;
       int Gy = 0;
       // X Gradient
-      for(int iOff = -1; iOff < 2; iOff++){
-        for(int jOff = -1; jOff < 2; jOff++){
+      for(iOff = -1; iOff < 2; iOff++){
+        for(jOff = -1; jOff < 2; jOff++){
           Gx += gxMask[(iOff+1)*3 + jOff+1]*src[(i+iOff)*width + j + jOff];
         }
       }
 
       // Y Gradient
-      for(int iOff = -1; iOff < 2; iOff++){
-        for(int jOff = -1; jOff < 2; jOff++){
+      for(iOff = -1; iOff < 2; iOff++){
+        for(jOff = -1; jOff < 2; jOff++){
           Gy += gyMask[(iOff+1)*3 + jOff+1]*src[(i+iOff)*width + j + jOff];
         }
       }

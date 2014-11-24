@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <cuda_runtime.h>
+//#include <helper_functions.h>
+
 // Image processing operations
 #include "cannyCPU.h"
 
@@ -12,21 +15,36 @@ void dumpImageToFile(int *srcImage, char *dstName, int width, int height);
 void addSquareToImage(int *srcImage, int width, int height, int position, int x, int y);
 
 int main(int argc, char **argv){
+  
+  // File I/O set up
   FILE *inputFile, *templateFile;
   char inputFileName[20];
+  
+  // Performance control
+  bool enabledGPU = true;
+  bool enabledCPU = true;
+  int threadsPerBlock = 256;
+  
+  // Image information
   int width, height, maxPValue;
   int tWidth, tHeight, *matchedPos;
 
-  int *image, *template;
+  int i;
+
+  // Host data items
+  int *image, *tmplate;
   int *gradientMag,*cannyImage,thresh = 50;
   enum direction *gradientDir;
+
+  // Device data items
+  int *d_image, *d_gradientMag, *d_gradientDir;
   
   if (argc < 5){
     printf("Incorrect command line arguments\n");
     exit(0);
   }
 
-  for(int i=1; i < argc; i++)
+  for(i=1; i < argc; i++)
   {
     if (strcmp(argv[i],"-f") == 0)
     {
@@ -56,6 +74,7 @@ int main(int argc, char **argv){
     exit(0);
   }
 
+  // Allocate Items in Host Memory
   if ( (image = (int*)malloc(width*height*sizeof(int))) == 0 ){
     printf("Error allocating image\n");
     exit(0);
@@ -76,18 +95,48 @@ int main(int argc, char **argv){
     exit(0);
   }
 
-  if ( (template = (int*)malloc(tWidth*tHeight*sizeof(int))) == 0 ){
+  if ( (tmplate = (int*)malloc(tWidth*tHeight*sizeof(int))) == 0 ){
     printf("Error allocating template array\n");
     exit(0);
   }
 
+  // Allocate Items in Device Memory
+  cudaError_t cError;
+  cError = cudaMalloc((void**) &d_image, width*height*sizeof(int));
+  if (cError != cudaSuccess){
+    printf("cudaMalloc d_image returned error code %d, line(%d)\n",cError, __LINE__); 
+    exit(0);
+  }
+  
+  cError = cudaMalloc((void**) &d_gradientMag, width*height*sizeof(int));
+  if (cError != cudaSuccess){
+    printf("cudaMalloc d_gradientMag returned error code %d, line(%d)\n",cError, __LINE__); 
+    exit(0);
+  }
+
+  cError = cudaMalloc((void**) &d_gradientDir, width*height*sizeof(int));
+  if (cError != cudaSuccess){
+    printf("cudaMalloc d_gradientDir returned error code %d, line(%d)\n",cError, __LINE__); 
+    exit(0);
+  } 
+
   copyImageFromFile(inputFile, image, width, height);
-  copyImageFromFile(templateFile, template, tWidth, tHeight);
+  copyImageFromFile(templateFile, tmplate, tWidth, tHeight);
+
+  // Copy image to from host to device
+  cError = cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyDeviceToHost);
+  if (cError != cudaSuccess){
+    printf("cudaMemcpy (image -> d_image) returned error %d, line: %d\n", cError, __LINE__);
+    exit(0);
+  }
 
   // Potential TODO: Noise reduction ( Gaussian )
   
   // Find gradient magnitude and directions
   calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
+  if (enabledGPU) {    
+    //calcGradientGPU(
+  }
   dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
 
   // Thin edges using non-maximum suppression
@@ -101,7 +150,7 @@ int main(int argc, char **argv){
   // TODO: Matching algorithms
   //        Template: Sum of absolute differences, (maybe) Geometric differences
   matchedPos = (int*)malloc(sizeof(int));
-  templateMatchCPU(cannyImage, width, height, template, tWidth, tHeight, matchedPos);
+  templateMatchCPU(cannyImage, width, height, tmplate, tWidth, tHeight, matchedPos);
   if (matchedPos > 0) {
     addSquareToImage(cannyImage, width, height, *matchedPos, tWidth, tHeight);
   }
@@ -112,36 +161,46 @@ int main(int argc, char **argv){
   free(gradientMag);
   free(gradientDir);
   free(cannyImage);
-  free(template);
+  free(tmplate);
+
+  //Free Device Memory
+  cudaFree(d_image);
+  cudaFree(d_gradientMag);
+  cudaFree(d_gradientDir);
+
   fclose(inputFile);
   fclose(templateFile);
   return 0;
 }
 
 void copyImageFromFile(FILE *srcImage, int *dstImage, int width, int height){
-  for(int i = 0; i < width*height; i++){
+  int i;
+  for(i = 0; i < width*height; i++){
     fscanf(srcImage, "%d",&dstImage[i]);
   }
 }
 
 void dumpImageToFile(int *srcImage, char *dstName, int width, int height){
   FILE *dstImage = fopen(dstName, "w");
+  int i;
+
   fprintf(dstImage,"P2\n%d %d\n%d\n", width, height, MAXPIXEL);
-  for(int i =0; i < width*height; i++){
+  for(i =0; i < width*height; i++){
     fprintf(dstImage,"%d\n",srcImage[i]);
   }
   fclose(dstImage);
 }
 
 void addSquareToImage(int *srcImage, int width, int height, int position, int x, int y){
+  int i,j;
   if (position < 0 || position%width + x > width || position/width > height){
     //out of bounds
   }else{
-    for (int j=0; j < x; j++){
+    for (j=0; j < x; j++){
       if (position%width + j < width) srcImage[position + j] = 255;
       if (position/width + y < height) srcImage[position + y*width + j] = 255;
     }
-    for (int i=0; i < y; i++){
+    for (i=0; i < y; i++){
       if (position%width + x < width) srcImage[position + i*width + x] = 255;
       if (position/width + i < height) srcImage[position + i*width ] = 255;
     }
