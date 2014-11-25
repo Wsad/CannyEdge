@@ -3,12 +3,16 @@
 #include <string.h>
 
 #include <cuda_runtime.h>
-//#include <helper_functions.h>
+#include <helper_cuda.h>
+#include <helper_functions.h>
 
 // Image processing operations
 #include "cannyCPU.h"
+#include "cannyGPU.h"
 
 #define MAXPIXEL 255
+
+#define ERROR_CHECK(x) if ((x) == NULL) { printf("Failed to allocate memory\n"); exit(EXIT_FAILURE); }
 
 void copyImageFromFile(FILE *srcImage, int *dstImage, int width, int height);
 void dumpImageToFile(int *srcImage, char *dstName, int width, int height);
@@ -22,7 +26,6 @@ int main(int argc, char **argv){
   
   // Performance control
   bool enabledGPU = true;
-  bool enabledCPU = true;
   int threadsPerBlock = 256;
   
   // Image information
@@ -75,69 +78,65 @@ int main(int argc, char **argv){
   }
 
   // Allocate Items in Host Memory
-  if ( (image = (int*)malloc(width*height*sizeof(int))) == 0 ){
-    printf("Error allocating image\n");
-    exit(0);
-  }
+  ERROR_CHECK(image = (int*)malloc(width*height*sizeof(int)));
 
-  if ( (gradientMag = (int*)malloc(width*height*sizeof(int))) == 0 ){
-    printf("Error allocating gradient magnitude array\n");
-    exit(0);
-  }
+  ERROR_CHECK(gradientMag = (int*)malloc(width*height*sizeof(int)));
 
-  if ( (gradientDir = (enum direction*)malloc(width*height*sizeof(enum direction))) == 0 ){
-    printf("Error allocating gradient direction array\n");
-    exit(0);
-  }
+  ERROR_CHECK(gradientDir = (enum direction*)malloc(width*height*sizeof(enum direction)));
 
-  if ( (cannyImage = (int*)malloc(width*height*sizeof(int))) == 0 ){
-    printf("Error allocating cannyImage array\n");
-    exit(0);
-  }
+  ERROR_CHECK(cannyImage = (int*)malloc(width*height*sizeof(int)));
 
-  if ( (tmplate = (int*)malloc(tWidth*tHeight*sizeof(int))) == 0 ){
-    printf("Error allocating template array\n");
-    exit(0);
-  }
+  ERROR_CHECK(tmplate = (int*)malloc(tWidth*tHeight*sizeof(int)));
 
   // Allocate Items in Device Memory
-  cudaError_t cError;
-  cError = cudaMalloc((void**) &d_image, width*height*sizeof(int));
-  if (cError != cudaSuccess){
-    printf("cudaMalloc d_image returned error code %d, line(%d)\n",cError, __LINE__); 
-    exit(0);
-  }
+  checkCudaErrors(cudaMalloc((void**) &d_image, width*height*sizeof(int)));
   
-  cError = cudaMalloc((void**) &d_gradientMag, width*height*sizeof(int));
-  if (cError != cudaSuccess){
-    printf("cudaMalloc d_gradientMag returned error code %d, line(%d)\n",cError, __LINE__); 
-    exit(0);
-  }
+  checkCudaErrors(cudaMalloc((void**) &d_gradientMag, width*height*sizeof(int)));
 
-  cError = cudaMalloc((void**) &d_gradientDir, width*height*sizeof(int));
-  if (cError != cudaSuccess){
-    printf("cudaMalloc d_gradientDir returned error code %d, line(%d)\n",cError, __LINE__); 
-    exit(0);
-  } 
+  checkCudaErrors(cudaMalloc((void**) &d_gradientDir, width*height*sizeof(int)));
 
+  // Copy image from file
   copyImageFromFile(inputFile, image, width, height);
   copyImageFromFile(templateFile, tmplate, tWidth, tHeight);
 
   // Copy image to from host to device
-  cError = cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyDeviceToHost);
-  if (cError != cudaSuccess){
-    printf("cudaMemcpy (image -> d_image) returned error %d, line: %d\n", cError, __LINE__);
-    exit(0);
-  }
+  checkCudaErrors(cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyHostToDevice));
+
+  // TODO: proper thread management
+  int numBlocks = (width*height + threadsPerBlock -1 )/threadsPerBlock;
+  dim3 tPerBlock(16,16);
 
   // Potential TODO: Noise reduction ( Gaussian )
   
   // Find gradient magnitude and directions
-  calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
   if (enabledGPU) {    
-    //calcGradientGPU(
+    calcGradientGPU<<<numBlocks, tPerBlock>>> 
+                        (d_image, d_gradientMag, d_gradientDir, width, height, thresh);
+    cudaDeviceSynchronize();  
+
+    //TODO: EdgeThinningGPU
+
+    //TODO: ConnectivityAnalysisGPU
+
+    //TODO: MatchTemplateGPU
+
+    checkCudaErrors(cudaMemcpy(gradientMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(gradientDir, d_gradientDir, width*height*sizeof(int), cudaMemcpyDeviceToHost));
   }
+  else{
+    calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
+  }
+
+
   dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
+  int j =0;
+  for(i=0; i < height; i ++){
+    for (j=0; j <width; j++){
+      printf("%d ", gradientDir[i*width + j]);
+    }
+    printf("\n");
+  }
+  exit(0);
 
   // Thin edges using non-maximum suppression
   thinEdgesCPU(gradientMag, gradientDir, width, height);
