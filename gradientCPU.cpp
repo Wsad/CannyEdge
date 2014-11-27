@@ -41,9 +41,9 @@ void calcGradientCPU(int *src, int *mag, enum direction *dir, int width, int hei
         }
       }
 
-      // TODO: Add threshold parameter
-      if ((abs(Gx) + abs(Gy)) > threshold){
-        mag[i*width + j] = min((abs(Gx) + abs(Gy)), 255);
+      int result = abs(Gx) + abs(Gy);
+      if (result > threshold){
+        mag[i*width + j] = min(result/6, 255);
       } else {
         mag[i*width + j] = 0;
       }

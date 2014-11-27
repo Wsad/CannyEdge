@@ -38,7 +38,7 @@ __global__ void calcGradientGPU(int *image, int *gradientMag, int *gradientDir, 
     int mag = abs(Gx) + abs(Gy);
 
     if (mag > threshold){
-      gradientMag[i*width + j] = mag;
+      gradientMag[i*width + j] = mag/6;
     }
     else{
       gradientMag[i*width + j] = 0;

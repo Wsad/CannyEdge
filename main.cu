@@ -12,11 +12,13 @@
 
 #define MAXPIXEL 255
 
-#define ERROR_CHECK(x) if ((x) == NULL) { printf("Failed to allocate memory\n"); exit(EXIT_FAILURE); }
+#define checkNotNull(x) if ((x) == NULL) { printf("Failed to allocate memory at line:%d\n",__LINE__); exit(EXIT_FAILURE); }
 
 void copyImageFromFile(FILE *srcImage, int *dstImage, int width, int height);
 void dumpImageToFile(int *srcImage, char *dstName, int width, int height);
 void addSquareToImage(int *srcImage, int width, int height, int position, int x, int y);
+void printImageASCII(int *image, int width, int height);
+bool arrayMatch(int *a, int *b, int size);
 
 int main(int argc, char **argv){
   
@@ -26,6 +28,7 @@ int main(int argc, char **argv){
   
   // Performance control
   bool enabledGPU = true;
+  bool enabledCPU = true;
   int threadsPerBlock = 256;
   
   // Image information
@@ -78,15 +81,20 @@ int main(int argc, char **argv){
   }
 
   // Allocate Items in Host Memory
-  ERROR_CHECK(image = (int*)malloc(width*height*sizeof(int)));
+  image = (int*)malloc(width*height*sizeof(int));
+  checkNotNull(image);
 
-  ERROR_CHECK(gradientMag = (int*)malloc(width*height*sizeof(int)));
+  gradientMag = (int*)malloc(width*height*sizeof(int));
+  checkNotNull(gradientMag);
 
-  ERROR_CHECK(gradientDir = (enum direction*)malloc(width*height*sizeof(enum direction)));
+  gradientDir = (enum direction*)malloc(width*height*sizeof(enum direction));
+  checkNotNull(gradientDir);
 
-  ERROR_CHECK(cannyImage = (int*)malloc(width*height*sizeof(int)));
+  cannyImage = (int*)malloc(width*height*sizeof(int));
+  checkNotNull(cannyImage);
 
-  ERROR_CHECK(tmplate = (int*)malloc(tWidth*tHeight*sizeof(int)));
+  tmplate = (int*)malloc(tWidth*tHeight*sizeof(int));
+  checkNotNull(tmplate);
 
   // Allocate Items in Device Memory
   checkCudaErrors(cudaMalloc((void**) &d_image, width*height*sizeof(int)));
@@ -108,59 +116,77 @@ int main(int argc, char **argv){
 
   // Potential TODO: Noise reduction ( Gaussian )
   
+  int *gpuMag, *gpuMagSuppressed;
+  gpuMag = (int*)malloc(sizeof(int)*width*height);
+  checkNotNull(gpuMag);
+  gpuMagSuppressed = (int*)malloc(sizeof(int)*width*height);
+  checkNotNull(gpuMag);
+
   // Find gradient magnitude and directions
   if (enabledGPU) {    
     calcGradientGPU<<<numBlocks, tPerBlock>>> 
                         (d_image, d_gradientMag, d_gradientDir, width, height, thresh);
     cudaDeviceSynchronize();  
+    checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    //printf("Initial gradient Magnitude\n");
+    //printImageASCII(gpuMag, width, height);
 
-    //TODO: EdgeThinningGPU
-
-    //TODO: ConnectivityAnalysisGPU
+    thinEdgesGPU<<<numBlocks, tPerBlock>>>(d_gradientMag, d_gradientDir, width, height);
+    cudaDeviceSynchronize();
+    
+    //TODO:hysteresisGPU(d_gradientMag, 80, 170, width, height, null);
 
     //TODO: MatchTemplateGPU
 
-    checkCudaErrors(cudaMemcpy(gradientMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    
+    checkCudaErrors(cudaMemcpy(gpuMagSuppressed, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(gradientDir, d_gradientDir, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    printf("Thinned edges\n");
+    printImageASCII(gpuMagSuppressed, width, height);
   }
-  else{
+  if (enabledCPU){
+    printImageASCII(image, width, height);
     calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
-  }
+    dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
+    //printf("Grad Magnitude CPU:\n");
+    //printImageASCII(gradientMag, width, height);
+    /*if(!arrayMatch(gradientMag, gpuMag, width*height)){
+      printf("CPU gradient magnitude does not match GPU\n");
+      exit(0);
+    }*/
 
-
-  dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
-  int j =0;
-  for(i=0; i < height; i ++){
-    for (j=0; j <width; j++){
-      printf("%d ", gradientDir[i*width + j]);
+    // Thin edges using non-maximum suppression
+    printf("Thined CPU:\n");
+    thinEdgesCPU(gradientMag, gradientDir, width, height);
+    printImageASCII(gradientMag, width, height);
+    dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
+    if(!arrayMatch(gradientMag, gpuMagSuppressed, width*height)){
+      printf("CPU suppressed gradient does not match GPU\n");
+      exit(0);
     }
-    printf("\n");
+
+    // TODO: Double Threshold (BFS from definite edges over potential edges)
+    connectivityCPU(gradientMag, cannyImage, width, height, 85, 125);
+    dumpImageToFile(cannyImage, "out-connected.pgm", width, height);
+
+    // TODO: Matching algorithms
+    //        Template: Sum of absolute differences, (maybe) Geometric differences
+    matchedPos = (int*)malloc(sizeof(int));
+    templateMatchCPU(cannyImage, width, height, tmplate, tWidth, tHeight, matchedPos);
+    if (matchedPos > 0) {
+      addSquareToImage(cannyImage, width, height, *matchedPos, tWidth, tHeight);
+    }
+    dumpImageToFile(cannyImage, "out-template.pgm", width, height);
   }
-  exit(0);
-
-  // Thin edges using non-maximum suppression
-  thinEdgesCPU(gradientMag, gradientDir, width, height);
-  dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
-
-  // TODO: Double Threshold (BFS from definite edges over potential edges)
-  connectivityCPU(gradientMag, cannyImage, width, height, 85, 125);
-  dumpImageToFile(cannyImage, "out-connected.pgm", width, height);
-
-  // TODO: Matching algorithms
-  //        Template: Sum of absolute differences, (maybe) Geometric differences
-  matchedPos = (int*)malloc(sizeof(int));
-  templateMatchCPU(cannyImage, width, height, tmplate, tWidth, tHeight, matchedPos);
-  if (matchedPos > 0) {
-    addSquareToImage(cannyImage, width, height, *matchedPos, tWidth, tHeight);
-  }
-  dumpImageToFile(cannyImage, "out-template.pgm", width, height);
-
 
   free(image);
   free(gradientMag);
   free(gradientDir);
   free(cannyImage);
   free(tmplate);
+
+  free(gpuMag);
+  free(gpuMagSuppressed);
 
   //Free Device Memory
   cudaFree(d_image);
@@ -204,4 +230,21 @@ void addSquareToImage(int *srcImage, int width, int height, int position, int x,
       if (position/width + i < height) srcImage[position + i*width ] = 255;
     }
   }
+}
+
+void printImageASCII(int *image, int width, int height){
+  int i,j;
+  for(i=0; i<height; i++){
+    for(j=0; j<width; j++){
+      printf("%d ",image[i*width + j]);
+    }
+    printf("\n");
+  }
+}
+
+bool arrayMatch(int *a, int *b, int size){
+  for(int i=0; i < size; i++){
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
