@@ -92,7 +92,7 @@ void put(queue_t *q, int pixel){
 }
 
 int get(queue_t *q){
-  if (q->front == q->front){
+  if (q->front == q->rear){
     return -1;
   } else {
     q->front = (q->front+1)%q->size;

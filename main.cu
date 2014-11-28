@@ -133,19 +133,23 @@ int main(int argc, char **argv){
 
     thinEdgesGPU<<<numBlocks, tPerBlock>>>(d_gradientMag, d_gradientDir, width, height);
     cudaDeviceSynchronize();
-    
-    //TODO:hysteresisGPU(d_gradientMag, 80, 170, width, height, null);
+   
+    checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    printf("Thinned GPU\n");
+    printImageASCII(gpuMag, width, height);
 
+    hysteresisGPU(d_gradientMag, 80, 170, width, height, NULL);
+    cudaDeviceSynchronize();
     //TODO: MatchTemplateGPU
 
     
     checkCudaErrors(cudaMemcpy(gpuMagSuppressed, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
     checkCudaErrors(cudaMemcpy(gradientDir, d_gradientDir, width*height*sizeof(int), cudaMemcpyDeviceToHost));
-    printf("Thinned edges\n");
+    printf("Hysteresis\n");
     printImageASCII(gpuMagSuppressed, width, height);
   }
   if (enabledCPU){
-    printImageASCII(image, width, height);
+    //printImageASCII(image, width, height);
     calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
     dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
     //printf("Grad Magnitude CPU:\n");
