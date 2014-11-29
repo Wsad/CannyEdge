@@ -1,77 +1,89 @@
 #include <stdio.h>
+#include <cuda_runtime.h>
+#include <helper_cuda.h>
 
-__global__ void preprocessFirstPass(int *mag,int lo_thres,int hi_thresh,int width,int height);
+__global__ void hysteresisFirstPass(int *mag,int lo_thres,int hi_thresh,int width,int height);
 
 __device__ void add(int *q, int pos, int front, int back);
 
 __device__ int get(int *q, int front, int back);
 
 
-#define SHM_DIMX 16
+#define TILE_DIM 8
 #define Q_SIZE 100
 
 void hysteresisGPU(int *d_mag, int lo_thresh, int hi_thresh, int width, int height, int *testArr){
   
-  int threadsPerBlock = 256;
-  int blockDimX = 16;
-  int blockDimY = 16;
-  int numBlocksX = (width+blockDimX-1)/blockDimX;
-  int numBlocksY = (height+blockDimY-1)/blockDimY;
-  dim3 tPerBlock(16,16);
+  int blockDimX = 7;
+  int blockDimY = 7;
+  int numBlocksX = (width+TILE_DIM-1)/TILE_DIM;
+  int numBlocksY = (height+TILE_DIM-1)/TILE_DIM;
+  dim3 tPerBlock(blockDimX,blockDimY);
   dim3 numBlocks(numBlocksX, numBlocksY);
 
-
-  preprocessFirstPass<<<numBlocks,tPerBlock,sizeof(int)*(blockDimX+1)*(blockDimY+1)>>>
+  hysteresisFirstPass<<<numBlocks,tPerBlock,sizeof(int)*TILE_DIM*TILE_DIM>>>
                               (d_mag, lo_thresh, hi_thresh, width, height);
 
   cudaDeviceSynchronize();
 
+//TODO Second pass to sychronize boundaries between thread blocks
+
 
 }
 
-__global__ void preprocessFirstPass(int *mag, int lo_thresh, int hi_thresh, int width, int height){
-  int d_x = blockIdx.x*blockDim.x + threadIdx.x;
-  int d_y = blockIdx.y*blockDim.y + threadIdx.y;
+__global__ void hysteresisFirstPass(int *mag, int lo_thresh, int hi_thresh, int width, int height){
+  int d_x = blockIdx.x*TILE_DIM + threadIdx.x;
+  int d_y = blockIdx.y*TILE_DIM + threadIdx.y;
 
-  int s_x = threadIdx.x;
-  int s_y = threadIdx.y;
+  int tidX = threadIdx.x;
+  int tidY = threadIdx.y;
 
-  extern __shared__ int shm[];
+  extern __shared__ int sm[];
 
-  if (d_x > width|| d_y > height) return;
-  shm[s_y*SHM_DIMX + s_x] = mag[d_y*width + d_x];
-  if (threadIdx.x == 0  && d_x + blockDim.x < width){
-    shm[s_y*SHM_DIMX + s_x + blockDim.x] = mag[d_y*width + d_x + blockDim.x];
-    int d_startx = blockIdx.x*blockDim.x;
-    int d_starty = blockIdx.y*blockDim.y;
-    shm[blockDim.y*SHM_DIMX + threadIdx.y] = mag[(d_starty+blockDim.y)*width + d_startx + threadIdx.y];
-    shm[blockDim.y*SHM_DIMX + blockDim.x] = mag[(d_starty+blockDim.y)*width + d_startx + blockDim.x];
+  // Copy tile in to shared memory
+  for (int i=0; i < TILE_DIM; i += blockDim.y){
+    for(int j=0; j < TILE_DIM; j += blockDim.x){
+      if ((d_x+j)<width && (d_y+i)<height && (tidX+j)<TILE_DIM && (tidY+i)<TILE_DIM){
+        sm[(tidY+i)*TILE_DIM + tidX+j] = mag[(d_y+i)*width + d_x+j];
+      }
+    }
   }
 
   __syncthreads();
+
 
   int q[Q_SIZE];
   int front = 0;
   int back = 0;
 
-  s_y = s_y +1;
-  s_x = s_x +1;
-
-  int i = s_y*SHM_DIMX + s_x;
-  int cur = shm[i];
+  int i = (threadIdx.y+1)*TILE_DIM + threadIdx.x+1;
+  int cur = sm[i];
   if (cur > lo_thresh){
     if (cur > hi_thresh){
-      shm[i] = -2; //Definite Edge
+      sm[i] = -2; //Definite Edge
       add(q,i,front,back);
-      //printf("Definite Edge At %d %d\n", d_x+1,d_y+1);
     }
     else{
-      shm[i] = -1; //Potential Edge
+      sm[i] = -1; //Potential Edge
     }
   }
   else{
-    shm[i] = 0; //Non-Edge
+    sm[i] = 0; //Non-Edge
   }
+
+  __syncthreads();
+
+  //TODO thread does its 'walk' or BFS
+
+  // Copy tile to device memory
+  for (int i=0; i < TILE_DIM; i += blockDim.y){
+    for(int j=0; j < TILE_DIM; j += blockDim.x){
+      if ((d_x+j)<width && (d_y+i)<height && (tidX+j)<TILE_DIM && (tidY+i)<TILE_DIM){
+        mag[(d_y+i)*width + d_x+j] = sm[(tidY+i)*TILE_DIM + tidX+j];
+      }
+    }
+  }
+
 }
 
 __device__ void add(int *q, int pos, int front, int back){

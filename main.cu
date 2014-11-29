@@ -138,7 +138,8 @@ int main(int argc, char **argv){
     printf("Thinned GPU\n");
     printImageASCII(gpuMag, width, height);
 
-    hysteresisGPU(d_gradientMag, 80, 170, width, height, NULL);
+    int *testArr;
+    hysteresisGPU(d_gradientMag, 80, 170, width, height, testArr);
     cudaDeviceSynchronize();
     //TODO: MatchTemplateGPU
 
@@ -240,7 +241,7 @@ void printImageASCII(int *image, int width, int height){
   int i,j;
   for(i=0; i<height; i++){
     for(j=0; j<width; j++){
-      printf("%d ",image[i*width + j]);
+      printf("%d\t",image[i*width + j]);
     }
     printf("\n");
   }
