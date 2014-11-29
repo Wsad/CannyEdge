@@ -167,13 +167,14 @@ int main(int argc, char **argv){
     dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
     if(!arrayMatch(gradientMag, gpuMagSuppressed, width*height)){
       printf("CPU suppressed gradient does not match GPU\n");
-      exit(0);
+      //exit(0);
     }
 
     // TODO: Double Threshold (BFS from definite edges over potential edges)
     connectivityCPU(gradientMag, cannyImage, width, height, 85, 125);
     dumpImageToFile(cannyImage, "out-connected.pgm", width, height);
-
+    printf("CPU Connected:\n");
+    printImageASCII(cannyImage,width,height);
     // TODO: Matching algorithms
     //        Template: Sum of absolute differences, (maybe) Geometric differences
     matchedPos = (int*)malloc(sizeof(int));

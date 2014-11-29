@@ -4,9 +4,9 @@
 
 __global__ void hysteresisFirstPass(int *mag,int lo_thres,int hi_thresh,int width,int height);
 
-__device__ void add(int *q, int pos, int front, int back);
+__device__ void add(int *q, int pos, int *front, int *back);
 
-__device__ int get(int *q, int front, int back);
+__device__ int get(int *q, int *front, int *back);
 
 
 #define TILE_DIM 8
@@ -14,8 +14,8 @@ __device__ int get(int *q, int front, int back);
 
 void hysteresisGPU(int *d_mag, int lo_thresh, int hi_thresh, int width, int height, int *testArr){
   
-  int blockDimX = 7;
-  int blockDimY = 7;
+  int blockDimX = 6;//Must be TILE_DIM - 2
+  int blockDimY = 6;//Must be TILE_Dim - 2
   int numBlocksX = (width+TILE_DIM-1)/TILE_DIM;
   int numBlocksY = (height+TILE_DIM-1)/TILE_DIM;
   dim3 tPerBlock(blockDimX,blockDimY);
@@ -26,7 +26,7 @@ void hysteresisGPU(int *d_mag, int lo_thresh, int hi_thresh, int width, int heig
 
   cudaDeviceSynchronize();
 
-//TODO Second pass to sychronize boundaries between thread blocks
+  //TODO Second pass to sychronize boundaries between thread blocks
 
 
 }
@@ -61,7 +61,7 @@ __global__ void hysteresisFirstPass(int *mag, int lo_thresh, int hi_thresh, int 
   if (cur > lo_thresh){
     if (cur > hi_thresh){
       sm[i] = -2; //Definite Edge
-      add(q,i,front,back);
+      add(q,i,&front,&back);
     }
     else{
       sm[i] = -1; //Potential Edge
@@ -73,7 +73,24 @@ __global__ void hysteresisFirstPass(int *mag, int lo_thresh, int hi_thresh, int 
 
   __syncthreads();
 
-  //TODO thread does its 'walk' or BFS
+  // Thread does its 'walk' or BFS
+  while(front != back){
+    i = get(q,&front,&back);
+    
+    for(int yOff=-TILE_DIM; yOff <= TILE_DIM; yOff += TILE_DIM){
+      for(int o=yOff-1; o < yOff+2; o++){
+        if((i+o)%TILE_DIM < TILE_DIM && (i+o)/TILE_DIM < TILE_DIM){
+          if(sm[i+o] == -1){
+            sm[i+o] = -2;
+            add(q,i+o,&front,&back);
+          }
+        }
+      }
+    }
+    
+    __syncthreads();
+  }
+  __syncthreads();
 
   // Copy tile to device memory
   for (int i=0; i < TILE_DIM; i += blockDim.y){
@@ -83,16 +100,16 @@ __global__ void hysteresisFirstPass(int *mag, int lo_thresh, int hi_thresh, int 
       }
     }
   }
-
+  
 }
 
-__device__ void add(int *q, int pos, int front, int back){
- q[back] = pos;
- back = (back+1)%Q_SIZE;
+__device__ void add(int *q, int pos, int *front, int *back){
+ q[*back] = pos;
+ *back = (*back+1)%Q_SIZE;
 }
 
-__device__ int get(int *q, int front, int back){
-  int t = front;
-  front = (front+1)%Q_SIZE;
+__device__ int get(int *q, int *front, int *back){
+  int t = *front;
+  *front = (*front+1)%Q_SIZE;
   return q[t];
 }

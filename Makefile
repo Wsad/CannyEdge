@@ -1,5 +1,5 @@
 CUDACC=nvcc
-CFLAGS= -c
+CFLAGS= -c -arch=sm_20
 INCL= -I /usr/local/cuda/samples/common/inc
 LINKS=
 OBJ=$(patsubst %.cu,%.o ,$(wildcard *.cu))
@@ -10,7 +10,7 @@ EXEC=canny
 all: $(EXEC)
 
 $(EXEC) : $(OBJ)
-	$(CUDACC) $(LINKS) $? -o $@
+	$(CUDACC) $(LINKS) *.o -o $@
 
 %.o:%.cu
 	$(CUDACC) $(INCL) $(CFLAGS) $< -o $@
