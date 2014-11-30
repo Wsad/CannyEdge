@@ -8,9 +8,14 @@
 
 // Image processing operations
 #include "cannyCPU.h"
-#include "cannyGPU.h"
+#include "cannyGPU.cuh"
 
 #define MAXPIXEL 255
+#define START_RUN 0
+#define GRAD_END  1
+#define THIN_END  2
+#define CONNECT_END 3
+#define TEMPLATE_END 4
 
 #define checkNotNull(x) if ((x) == NULL) { printf("Failed to allocate memory at line:%d\n",__LINE__); exit(EXIT_FAILURE); }
 
@@ -41,6 +46,7 @@ int main(int argc, char **argv){
   int *image, *tmplate;
   int *gradientMag,*cannyImage,thresh = 50;
   enum direction *gradientDir;
+  bool print = false;
 
   // Device data items
   int *d_image, *d_gradientMag, *d_gradientDir;
@@ -63,6 +69,15 @@ int main(int argc, char **argv){
     else if (strcmp(argv[i],"-t") == 0)
     {
       templateFile = fopen(argv[i+1],"r");
+    }
+    else if (strcmp(argv[i],"--show-partial") == 0){
+      print = true;
+    }
+    else if (strcmp(argv[i],"--gpu") == 0){
+      enabledGPU = true;
+    }
+    else if (strcmp(argv[i],"--cpu") == 0){
+      enabledCPU = true;
     }
   }
 
@@ -103,10 +118,26 @@ int main(int argc, char **argv){
 
   checkCudaErrors(cudaMalloc((void**) &d_gradientDir, width*height*sizeof(int)));
 
+  int *gpuMag, *gpuMagSuppressed;
+  gpuMag = (int*)malloc(sizeof(int)*width*height);
+  checkNotNull(gpuMag);
+  
+  gpuMagSuppressed = (int*)malloc(sizeof(int)*width*height);
+  checkNotNull(gpuMag);
+
+  // File I/O 
   // Copy image from file
   copyImageFromFile(inputFile, image, width, height);
   copyImageFromFile(templateFile, tmplate, tWidth, tHeight);
 
+  int numEvents = 5;
+  cudaEvent_t eventCPU[numEvents];
+  cudaEvent_t eventGPU[numEvents];
+  for(int i=0; i<numEvents; i++){
+    cudaEventCreate(&eventCPU[i]);
+    cudaEventCreate(&eventGPU[i]);
+  }
+  
   // Copy image to from host to device
   checkCudaErrors(cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyHostToDevice));
 
@@ -114,74 +145,119 @@ int main(int argc, char **argv){
   int numBlocks = (width*height + threadsPerBlock -1 )/threadsPerBlock;
   dim3 tPerBlock(16,16);
 
-  // Potential TODO: Noise reduction ( Gaussian )
   
-  int *gpuMag, *gpuMagSuppressed;
-  gpuMag = (int*)malloc(sizeof(int)*width*height);
-  checkNotNull(gpuMag);
-  gpuMagSuppressed = (int*)malloc(sizeof(int)*width*height);
-  checkNotNull(gpuMag);
-
   // Find gradient magnitude and directions
-  if (enabledGPU) {    
+  if (enabledGPU) 
+  {    
+    cudaEventRecord(eventGPU[START_RUN]);
     calcGradientGPU<<<numBlocks, tPerBlock>>> 
-                        (d_image, d_gradientMag, d_gradientDir, width, height, thresh);
-    cudaDeviceSynchronize();  
-    checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
-    //printf("Initial gradient Magnitude\n");
-    //printImageASCII(gpuMag, width, height);
+                     (d_image, d_gradientMag, d_gradientDir, width, height, thresh);
+
+    cudaEventRecord(eventGPU[GRAD_END]);
+    cudaEventSynchronize(eventGPU[GRAD_END]);
+    
+    if(print){
+      checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+      printf("Initial gradient Magnitude\n");
+      printImageASCII(gpuMag, width, height);
+    }
 
     thinEdgesGPU<<<numBlocks, tPerBlock>>>(d_gradientMag, d_gradientDir, width, height);
-    cudaDeviceSynchronize();
+    
+    cudaEventRecord(eventGPU[THIN_END]);
+    cudaEventSynchronize(eventGPU[THIN_END]);
    
-    checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
-    printf("Thinned GPU\n");
-    printImageASCII(gpuMag, width, height);
+    if(print){
+      checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+      checkCudaErrors(cudaMemcpy(gradientDir, d_gradientDir, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+      printf("Thinned GPU\n");
+      printImageASCII(gpuMag, width, height);
+    }
 
     int *testArr;
     hysteresisGPU(d_gradientMag, 80, 170, width, height, testArr);
-    cudaDeviceSynchronize();
-    //TODO: MatchTemplateGPU
-
     
-    checkCudaErrors(cudaMemcpy(gpuMagSuppressed, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy(gradientDir, d_gradientDir, width*height*sizeof(int), cudaMemcpyDeviceToHost));
-    printf("Hysteresis\n");
-    printImageASCII(gpuMagSuppressed, width, height);
+    cudaEventRecord(eventGPU[CONNECT_END]);
+    cudaEventSynchronize(eventGPU[CONNECT_END]);
+    
+    if(print){
+      checkCudaErrors(cudaMemcpy(gpuMagSuppressed, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+      printf("Hysteresis\n");
+      printImageASCII(gpuMagSuppressed, width, height);
+    }
+  
+    //TODO: MatchTemplateGPU
+    cudaEventRecord(eventGPU[TEMPLATE_END]);
+    cudaEventSynchronize(eventGPU[TEMPLATE_END]);    
+
+    float time,total;
+    printf("STAGE\tGPU Time\n");
+    cudaEventElapsedTime(&total,eventGPU[0],eventGPU[numEvents-1]);
+    printf("T\t%f\n",numEvents,total);
+    for(int i=0; i<numEvents-1; i++){
+      cudaEventElapsedTime(&time,eventGPU[i], eventGPU[i+1]);
+      printf("%d\t%f\t%f%\n",i,time,100*time/total);
+    }
+    printf("\n");
+    
   }
   if (enabledCPU){
-    //printImageASCII(image, width, height);
+    cudaEventRecord(eventCPU[START_RUN]);
     calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
-    dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
-    //printf("Grad Magnitude CPU:\n");
-    //printImageASCII(gradientMag, width, height);
-    /*if(!arrayMatch(gradientMag, gpuMag, width*height)){
-      printf("CPU gradient magnitude does not match GPU\n");
-      exit(0);
-    }*/
+    cudaEventRecord(eventCPU[GRAD_END]);
 
-    // Thin edges using non-maximum suppression
-    printf("Thined CPU:\n");
-    thinEdgesCPU(gradientMag, gradientDir, width, height);
-    printImageASCII(gradientMag, width, height);
-    dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
-    if(!arrayMatch(gradientMag, gpuMagSuppressed, width*height)){
-      printf("CPU suppressed gradient does not match GPU\n");
+    if(print){
+      dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
+      printf("Grad Magnitude CPU:\n");
+      printImageASCII(gradientMag, width, height);
+      //if(!arrayMatch(gradientMag, gpuMag, width*height)){
+      //printf("CPU gradient magnitude does not match GPU\n");
       //exit(0);
     }
 
-    // TODO: Double Threshold (BFS from definite edges over potential edges)
+    // Thin edges using non-maximum suppression
+    thinEdgesCPU(gradientMag, gradientDir, width, height);
+    cudaEventRecord(eventCPU[THIN_END]);
+
+    if(print){
+      printImageASCII(gradientMag, width, height);
+      dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
+      //if(!arrayMatch(gradientMag, gpuMagSuppressed, width*height)){
+        //printf("CPU suppressed gradient does not match GPU\n");
+        //exit(0);
+      //}
+    }
+
+    // Double Threshold Hysteresis
     connectivityCPU(gradientMag, cannyImage, width, height, 85, 125);
-    dumpImageToFile(cannyImage, "out-connected.pgm", width, height);
-    printf("CPU Connected:\n");
-    printImageASCII(cannyImage,width,height);
+    cudaEventRecord(eventCPU[CONNECT_END]);
+
+    if(print){
+      dumpImageToFile(cannyImage, "out-connected.pgm", width, height);
+      printf("CPU Connected:\n");
+      printImageASCII(cannyImage,width,height);
+    }
+
     // TODO: Matching algorithms
     //        Template: Sum of absolute differences, (maybe) Geometric differences
     matchedPos = (int*)malloc(sizeof(int));
     templateMatchCPU(cannyImage, width, height, tmplate, tWidth, tHeight, matchedPos);
+    cudaEventRecord(eventCPU[TEMPLATE_END]);
+
     if (matchedPos > 0) {
       addSquareToImage(cannyImage, width, height, *matchedPos, tWidth, tHeight);
     }
+
+    float time,total;
+    printf("STAGE\tCPU Time\n");
+    cudaEventElapsedTime(&total,eventCPU[0],eventCPU[numEvents-1]);
+    printf("T\t%f\n",numEvents,total);
+    for(int i=0; i<numEvents-1; i++){
+      cudaEventElapsedTime(&time,eventCPU[i], eventCPU[i+1]);
+      printf("%d\t%f\t%f%\n",i,time,100*time/total);
+    }
+    printf("\n");
+    
     dumpImageToFile(cannyImage, "out-template.pgm", width, height);
   }
 
