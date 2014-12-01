@@ -1,12 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include <helper_functions.h>
 
-// Image processing operations
 #include "cannyCPU.h"
 #include "cannyGPU.cuh"
 
@@ -32,9 +32,9 @@ int main(int argc, char **argv){
   char inputFileName[20];
   
   // Performance control
-  bool enabledGPU = true;
-  bool enabledCPU = true;
-  int threadsPerBlock = 256;
+  bool enabledGPU = false;
+  bool enabledCPU = false;
+  bool outFiles = false;
   
   // Image information
   int width, height, maxPValue;
@@ -46,6 +46,8 @@ int main(int argc, char **argv){
   int *image, *tmplate;
   int *gradientMag,*cannyImage,thresh = 50;
   enum direction *gradientDir;
+  int loThresh = 85;
+  int hiThresh = 125;
   bool print = false;
 
   // Device data items
@@ -70,14 +72,23 @@ int main(int argc, char **argv){
     {
       templateFile = fopen(argv[i+1],"r");
     }
-    else if (strcmp(argv[i],"--show-partial") == 0){
+    else if (strcmp(argv[i],"--print") == 0){
       print = true;
+    }
+    else if (strcmp(argv[i],"--files") == 0){
+      outFiles =true;
     }
     else if (strcmp(argv[i],"--gpu") == 0){
       enabledGPU = true;
     }
     else if (strcmp(argv[i],"--cpu") == 0){
       enabledCPU = true;
+    }
+    else if (strcmp(argv[i],"-cLo") == 0){
+      loThresh = atoi(argv[i+1]);
+    }
+    else if (strcmp(argv[i],"-cHi") ==0){
+      hiThresh = atoi(argv[i+1]);
     }
   }
 
@@ -131,24 +142,25 @@ int main(int argc, char **argv){
   copyImageFromFile(templateFile, tmplate, tWidth, tHeight);
 
   int numEvents = 5;
-  cudaEvent_t eventCPU[numEvents];
+  struct timespec eventCPU[numEvents];
   cudaEvent_t eventGPU[numEvents];
   for(int i=0; i<numEvents; i++){
-    cudaEventCreate(&eventCPU[i]);
     cudaEventCreate(&eventGPU[i]);
   }
-  
-  // Copy image to from host to device
-  checkCudaErrors(cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyHostToDevice));
-
-  // TODO: proper thread management
-  int numBlocks = (width*height + threadsPerBlock -1 )/threadsPerBlock;
-  dim3 tPerBlock(16,16);
-
   
   // Find gradient magnitude and directions
   if (enabledGPU) 
   {    
+    // Copy image to from host to device
+    checkCudaErrors(cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyHostToDevice));
+
+    int blockDimX = 8;
+    int blockDimY = 8;
+    int numBlocksX = (width+blockDimX-1)/blockDimX;
+    int numBlocksY = (height+blockDimY-1)/blockDimY;
+    dim3 tPerBlock(blockDimX,blockDimY);
+    dim3 numBlocks(numBlocksX,numBlocksY);
+    
     cudaEventRecord(eventGPU[START_RUN]);
     calcGradientGPU<<<numBlocks, tPerBlock>>> 
                      (d_image, d_gradientMag, d_gradientDir, width, height, thresh);
@@ -174,8 +186,7 @@ int main(int argc, char **argv){
       printImageASCII(gpuMag, width, height);
     }
 
-    int *testArr;
-    hysteresisGPU(d_gradientMag, 80, 170, width, height, testArr);
+    hysteresisGPU(d_gradientMag, loThresh, hiThresh, width, height, NULL);
     
     cudaEventRecord(eventGPU[CONNECT_END]);
     cudaEventSynchronize(eventGPU[CONNECT_END]);
@@ -202,12 +213,15 @@ int main(int argc, char **argv){
     
   }
   if (enabledCPU){
-    cudaEventRecord(eventCPU[START_RUN]);
+    clock_gettime(CLOCK_MONOTONIC,&eventCPU[START_RUN]);
     calcGradientCPU(image, gradientMag, gradientDir, width, height, thresh);
-    cudaEventRecord(eventCPU[GRAD_END]);
-
-    if(print){
+    clock_gettime(CLOCK_MONOTONIC,&eventCPU[GRAD_END]);
+    
+    if(outFiles){
       dumpImageToFile(gradientMag, "out-gradient.pgm", width, height);
+    }
+    
+    if(print){
       printf("Grad Magnitude CPU:\n");
       printImageASCII(gradientMag, width, height);
       //if(!arrayMatch(gradientMag, gpuMag, width*height)){
@@ -217,11 +231,15 @@ int main(int argc, char **argv){
 
     // Thin edges using non-maximum suppression
     thinEdgesCPU(gradientMag, gradientDir, width, height);
-    cudaEventRecord(eventCPU[THIN_END]);
+    clock_gettime(CLOCK_MONOTONIC,&eventCPU[THIN_END]);
+
+    if(outFiles){
+      dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
+    }
 
     if(print){
+      printf("Suppressed Edges CPU:\n");
       printImageASCII(gradientMag, width, height);
-      dumpImageToFile(gradientMag, "out-edgethin.pgm", width, height);
       //if(!arrayMatch(gradientMag, gpuMagSuppressed, width*height)){
         //printf("CPU suppressed gradient does not match GPU\n");
         //exit(0);
@@ -229,11 +247,14 @@ int main(int argc, char **argv){
     }
 
     // Double Threshold Hysteresis
-    connectivityCPU(gradientMag, cannyImage, width, height, 85, 125);
-    cudaEventRecord(eventCPU[CONNECT_END]);
+    connectivityCPU(gradientMag, cannyImage, width, height, loThresh, hiThresh);
+    clock_gettime(CLOCK_MONOTONIC,&eventCPU[CONNECT_END]);
 
-    if(print){
+    if(outFiles){
       dumpImageToFile(cannyImage, "out-connected.pgm", width, height);
+    }
+    
+    if(print){
       printf("CPU Connected:\n");
       printImageASCII(cannyImage,width,height);
     }
@@ -242,18 +263,21 @@ int main(int argc, char **argv){
     //        Template: Sum of absolute differences, (maybe) Geometric differences
     matchedPos = (int*)malloc(sizeof(int));
     templateMatchCPU(cannyImage, width, height, tmplate, tWidth, tHeight, matchedPos);
-    cudaEventRecord(eventCPU[TEMPLATE_END]);
-
+    clock_gettime(CLOCK_MONOTONIC,&eventCPU[TEMPLATE_END]);
     if (matchedPos > 0) {
       addSquareToImage(cannyImage, width, height, *matchedPos, tWidth, tHeight);
     }
 
-    float time,total;
-    printf("STAGE\tCPU Time\n");
-    cudaEventElapsedTime(&total,eventCPU[0],eventCPU[numEvents-1]);
-    printf("T\t%f\n",numEvents,total);
+    long long startMS = eventCPU[START_RUN].tv_sec*1000 + (double)(eventCPU[START_RUN].tv_nsec)/1000000.0;
+    long long stopMS = eventCPU[TEMPLATE_END].tv_sec*1000 + (double)(eventCPU[TEMPLATE_END].tv_nsec)/1000000.0;
+    double time,total;    
+    printf("STAGE\tCPU Time (ms)\n");
+    total = (double)(stopMS) - (double)startMS;
+    printf("T\t%f\n",total);
     for(int i=0; i<numEvents-1; i++){
-      cudaEventElapsedTime(&time,eventCPU[i], eventCPU[i+1]);
+      startMS = 1000*eventCPU[i].tv_sec + (double)(eventCPU[i].tv_nsec)/1000000.0;
+      stopMS = 1000*eventCPU[i+1].tv_sec + (double)(eventCPU[i+1].tv_nsec)/1000000.0;
+      time = (double)stopMS - (double)startMS;
       printf("%d\t%f\t%f%\n",i,time,100*time/total);
     }
     printf("\n");
