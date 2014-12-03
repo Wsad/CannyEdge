@@ -6,7 +6,7 @@ __global__ void thinEdgesGPU(int *mag, int *dir, int width, int height){
   int x = blockIdx.x*blockDim.x + threadIdx.x + 1;
 
   // Check whether thread is within image boundary
-  if (x > width-1 || y > height-1) return;
+  if (x > width-2 || y > height-2) return;
 
   // Get gradient direction for current thread
   int tDir = dir[y*width + x];

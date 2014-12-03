@@ -154,8 +154,8 @@ int main(int argc, char **argv){
     // Copy image to from host to device
     checkCudaErrors(cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyHostToDevice));
 
-    int blockDimX = 8;
-    int blockDimY = 8;
+    int blockDimX = 16;
+    int blockDimY = 16;
     int numBlocksX = (width+blockDimX-1)/blockDimX;
     int numBlocksY = (height+blockDimY-1)/blockDimY;
     dim3 tPerBlock(blockDimX,blockDimY);
@@ -168,10 +168,15 @@ int main(int argc, char **argv){
     cudaEventRecord(eventGPU[GRAD_END]);
     cudaEventSynchronize(eventGPU[GRAD_END]);
     
-    if(print){
+    if(print || outFiles){
       checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    }
+    if(print){
       printf("Initial gradient Magnitude\n");
       printImageASCII(gpuMag, width, height);
+    }
+    if (outFiles){
+      dumpImageToFile(gpuMag, "out-gradientGPU.pgm",width, height);
     }
 
     thinEdgesGPU<<<numBlocks, tPerBlock>>>(d_gradientMag, d_gradientDir, width, height);
@@ -179,11 +184,16 @@ int main(int argc, char **argv){
     cudaEventRecord(eventGPU[THIN_END]);
     cudaEventSynchronize(eventGPU[THIN_END]);
    
-    if(print){
+    if(print || outFiles){
       checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
       checkCudaErrors(cudaMemcpy(gradientDir, d_gradientDir, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    }
+    if (print){
       printf("Thinned GPU\n");
       printImageASCII(gpuMag, width, height);
+    }
+    if(outFiles){
+      dumpImageToFile(gpuMag,"out-thinnedGPU.pgm",width,height);
     }
 
     hysteresisGPU(d_gradientMag, loThresh, hiThresh, width, height, NULL);
@@ -202,7 +212,7 @@ int main(int argc, char **argv){
     cudaEventSynchronize(eventGPU[TEMPLATE_END]);    
 
     float time,total;
-    printf("STAGE\tGPU Time\n");
+    printf("STAGE\tGPU Time (ms)\t%dx%d\n",width,height);
     cudaEventElapsedTime(&total,eventGPU[0],eventGPU[numEvents-1]);
     printf("T\t%f\n",numEvents,total);
     for(int i=0; i<numEvents-1; i++){
@@ -271,7 +281,7 @@ int main(int argc, char **argv){
     long long startMS = eventCPU[START_RUN].tv_sec*1000 + (double)(eventCPU[START_RUN].tv_nsec)/1000000.0;
     long long stopMS = eventCPU[TEMPLATE_END].tv_sec*1000 + (double)(eventCPU[TEMPLATE_END].tv_nsec)/1000000.0;
     double time,total;    
-    printf("STAGE\tCPU Time (ms)\n");
+    printf("STAGE\tCPU Time (ms)\t%dx%d\n",width,height);
     total = (double)(stopMS) - (double)startMS;
     printf("T\t%f\n",total);
     for(int i=0; i<numEvents-1; i++){

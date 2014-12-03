@@ -1,8 +1,9 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <limits.h>
 
 void templateMatchCPU(int *cannyImage, int width, int height, int *tmplate, int tWidth, int tHeight, int *maxPos){
-  int max = -1;
+  int min= INT_MAX;
   int i,j,iOff,jOff;
 
   for (i=0; i < height - tHeight; i++){
@@ -13,11 +14,11 @@ void templateMatchCPU(int *cannyImage, int width, int height, int *tmplate, int 
           sum += abs(cannyImage[i*width + j + iOff*width + jOff] - tmplate[iOff*tWidth + jOff]);
         }
       }
-      if (sum > max){
-        max = sum;
+      if (sum < min){
+        min = sum;
         *maxPos = i*width + j;
       }
     }
   }
-  if (max < 0) *maxPos = -1;
+  if (min == INT_MAX) *maxPos = -1;
 }
