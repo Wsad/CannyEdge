@@ -6,7 +6,7 @@ __global__ void templateMatchGPU(int *image, int width, int height, int * tmplat
   int idx = blockIdx.x*blockDim.x + threadIdx.x;
   int idy = blockIdx.x*blockDim.y + threadIdx.y;
   
-  if (idx > width || idy > height) return;
+  if (idx > width-1 || idy > height-1) return;
 
   int sum = 0;
   for(int i =0; i < tHeight; i++){

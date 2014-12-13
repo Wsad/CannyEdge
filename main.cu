@@ -230,6 +230,11 @@ int main(int argc, char **argv){
         min = gpuResult[i];
         minPos = i;
       }
+      if (gpuMag[i] == -2) {
+        gpuMag[i] = 255;
+      }else{
+        gpuMag[i] = 0;
+      }
     }
     addSquareToImage(gpuMag, width, height, minPos, tWidth, tHeight);
 
