@@ -51,7 +51,7 @@ int main(int argc, char **argv){
   bool print = false;
 
   // Device data items
-  int *d_image, *d_gradientMag, *d_gradientDir;
+  int *d_image, *d_gradientMag, *d_gradientDir,*d_tmplate,*d_results;
   
   if (argc < 5){
     printf("Incorrect command line arguments\n");
@@ -129,12 +129,19 @@ int main(int argc, char **argv){
 
   checkCudaErrors(cudaMalloc((void**) &d_gradientDir, width*height*sizeof(int)));
 
-  int *gpuMag, *gpuMagSuppressed;
+  checkCudaErrors(cudaMalloc((void**) &d_tmplate, tWidth*tHeight*sizeof(int)));
+
+  checkCudaErrors(cudaMalloc((void**) &d_results, width*height*sizeof(int)));
+
+  int *gpuMag, *gpuMagSuppressed, *gpuResult;
   gpuMag = (int*)malloc(sizeof(int)*width*height);
   checkNotNull(gpuMag);
   
   gpuMagSuppressed = (int*)malloc(sizeof(int)*width*height);
   checkNotNull(gpuMag);
+
+  gpuResult = (int*)malloc(sizeof(int)*width*height);
+  checkNotNull(gpuResult);
 
   // File I/O 
   // Copy image from file
@@ -153,6 +160,7 @@ int main(int argc, char **argv){
   {    
     // Copy image to from host to device
     checkCudaErrors(cudaMemcpy(d_image, image, width*height*sizeof(int), cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_tmplate, tmplate, tWidth*tHeight*sizeof(int), cudaMemcpyHostToDevice));
 
     int blockDimX = 16;
     int blockDimY = 16;
@@ -206,10 +214,26 @@ int main(int argc, char **argv){
       printf("Hysteresis\n");
       printImageASCII(gpuMagSuppressed, width, height);
     }
-  
-    //TODO: MatchTemplateGPU
+ 
+    templateMatchGPU<<<numBlocks,tPerBlock>>>(d_gradientMag, width, height, d_tmplate, tWidth, tHeight, d_results );
+
     cudaEventRecord(eventGPU[TEMPLATE_END]);
     cudaEventSynchronize(eventGPU[TEMPLATE_END]);    
+
+    checkCudaErrors(cudaMemcpy(gpuMag, d_gradientMag, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(gpuResult, d_results, width*height*sizeof(int), cudaMemcpyDeviceToHost));
+
+    int min = INT_MAX;
+    int minPos = 0;
+    for (int i=0; i < width*height;  i++){
+      if (gpuResult[i] < min){
+        min = gpuResult[i];
+        minPos = i;
+      }
+    }
+    addSquareToImage(gpuMag, width, height, minPos, tWidth, tHeight);
+
+    dumpImageToFile(gpuMag, "out-template.pgm", width, height);
 
     float time,total;
     printf("STAGE\tGPU Time (ms)\t%dx%d\n",width,height);
