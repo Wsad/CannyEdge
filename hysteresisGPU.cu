@@ -17,6 +17,10 @@ __device__ int get(int *q, int *front, int *back);
 
 void hysteresisGPU(int *d_mag, int lo_thresh, int hi_thresh, int width, int height, int *testArr){
   
+  cudaEvent_t pass1,pass2;
+  cudaEventCreate(&pass1);
+  cudaEventCreate(&pass2);
+  
   int blockDimX = 6;//Must be TILE_DIM - 2
   int blockDimY = 6;//Must be TILE_Dim - 2
   int numBlocksX = (width+TILE_DIM-1)/TILE_DIM;
@@ -27,14 +31,16 @@ void hysteresisGPU(int *d_mag, int lo_thresh, int hi_thresh, int width, int heig
   hysteresisFirstPass<<<numBlocks,tPerBlock,sizeof(int)*TILE_DIM*TILE_DIM>>>
                               (d_mag, lo_thresh, hi_thresh, width, height);
 
-  cudaDeviceSynchronize();
+  cudaEventRecord(pass1);
+  cudaEventSynchronize(pass1);
 
   tPerBlock.x = TILE_DIM;
   tPerBlock.y = 4;
   hysteresisSecondPass<<<numBlocks,tPerBlock, sizeof(int)*TILE_DIM*TILE_DIM>>>
                               (d_mag, lo_thresh, hi_thresh, width, height);
 
-  cudaDeviceSynchronize();                              
+  cudaEventRecord(pass2);
+  cudaEventSynchronize(pass2);                              
 
 }
 
